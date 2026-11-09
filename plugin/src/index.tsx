@@ -3,6 +3,8 @@ import { ButtonItem, PanelSection, PanelSectionRow, TextField, definePlugin } fr
 import { callable } from "@decky/api";
 
 const defaultName = callable<[], string>("default_name");
+const namelessMap = callable<[], Record<string, string>>("nameless_map");
+const rememberName = callable<[name: string, signature: string], void>("remember_name");
 
 /* Steam's own collection store: a global of the client, not a file. */
 declare const collectionStore: any;
@@ -41,13 +43,41 @@ function shortcuts(): any[] {
   });
 }
 
-function listCollections(): Coll[] {
+const HIDDEN_IDS = new Set(["favorites", "uncategorized", "soundtracks", "installed", "installed_locally"]);
+const HIDDEN_NAMES = new Set([
+  "favoris", "favorites", "sans catégorie", "sans categorie", "uncategorized",
+  "bandes-son", "bandes son", "soundtracks", "jeux installés localement", "installed locally",
+]);
+
+function visibleCollections(): any[] {
   const cs = collectionStore;
-  const cols = cs?.userCollections ?? [];
-  return cols.map((c: any) => ({
+  return (cs?.userCollections ?? []).filter((c: any) => {
+    try { if (typeof c?.IsDynamic === "function" && c.IsDynamic()) return false; } catch { /* */ }
+    if (HIDDEN_IDS.has(String(c?.id ?? "").toLowerCase())) return false;
+    return !HIDDEN_NAMES.has(String(c?.displayName ?? "").trim().toLowerCase());
+  });
+}
+
+function listCollections(): Coll[] {
+  return visibleCollections().map((c: any) => ({
     name: c?.displayName ?? "?",
     count: c?.visibleApps?.length ?? c?.allApps?.length ?? c?.apps?.size ?? 0,
   }));
+}
+
+function signatureOf(c: any): string {
+  const ids: number[] = [];
+  for (const key of ["allApps", "visibleApps", "apps"]) {
+    const v = c?.[key];
+    if (!v) continue;
+    const it = typeof v[Symbol.iterator] === "function" ? Array.from(v) : [];
+    for (const a of it) {
+      const id = typeof a === "number" ? a : a?.appid ?? a?.app_id;
+      if (typeof id === "number") ids.push(id);
+    }
+    if (ids.length) break;
+  }
+  return ids.sort((x, y) => x - y).join(",");
 }
 
 async function addToCollection(name: string, appids: number[]) {
@@ -76,9 +106,26 @@ function Content() {
     }
   };
 
+  const fixNameless = async () => {
+    try {
+      const map = await namelessMap();
+      const known = Object.keys(map || {});
+      if (!known.length) return;
+      for (const c of visibleCollections()) {
+        if (String(c?.displayName ?? "").trim()) continue;
+        const sig = signatureOf(c);
+        if (map[sig]) {
+          log("renaming nameless collection to", map[sig]);
+          c.displayName = map[sig];
+          await c.Save();
+        }
+      }
+    } catch (e) { log("fixNameless failed", String(e)); }
+  };
+
   useEffect(() => {
     log("mounted");
-    refresh();
+    void fixNameless().then(refresh);
     defaultName().then((v) => { if (v) { log("default name", v); setName(v); } }).catch(() => {});
   }, []);
 
@@ -93,7 +140,9 @@ function Content() {
       const picked = pool.filter((a: any) => String(a?.display_name ?? "").toLowerCase().includes(f));
       log("matched", picked.length, "for", f);
       if (!picked.length) { setMsg(T.noMatch); setBusy(false); return; }
-      await addToCollection(n, picked.map((a: any) => a.appid));
+      const ids = picked.map((a: any) => a.appid);
+      const coll = await addToCollection(n, ids);
+      try { await rememberName(n, signatureOf(coll)); } catch (e) { log("remember failed", String(e)); }
       setMsg(T.created(n, picked.length));
       refresh();
     } catch (e) {

@@ -18,6 +18,8 @@ if (api._version != API_VERSION) {
 const callable = api.callable;
 
 const defaultName = callable("default_name");
+const namelessMap = callable("nameless_map");
+const rememberName = callable("remember_name");
 const log = (...a) => { try {
     console.log("[CollectionCreator]", ...a);
 }
@@ -54,13 +56,46 @@ function shortcuts() {
         }
     });
 }
-function listCollections() {
+const HIDDEN_IDS = new Set(["favorites", "uncategorized", "soundtracks", "installed", "installed_locally"]);
+const HIDDEN_NAMES = new Set([
+    "favoris", "favorites", "sans catégorie", "sans categorie", "uncategorized",
+    "bandes-son", "bandes son", "soundtracks", "jeux installés localement", "installed locally",
+]);
+function visibleCollections() {
     const cs = collectionStore;
-    const cols = cs?.userCollections ?? [];
-    return cols.map((c) => ({
+    return (cs?.userCollections ?? []).filter((c) => {
+        try {
+            if (typeof c?.IsDynamic === "function" && c.IsDynamic())
+                return false;
+        }
+        catch { /* */ }
+        if (HIDDEN_IDS.has(String(c?.id ?? "").toLowerCase()))
+            return false;
+        return !HIDDEN_NAMES.has(String(c?.displayName ?? "").trim().toLowerCase());
+    });
+}
+function listCollections() {
+    return visibleCollections().map((c) => ({
         name: c?.displayName ?? "?",
         count: c?.visibleApps?.length ?? c?.allApps?.length ?? c?.apps?.size ?? 0,
     }));
+}
+function signatureOf(c) {
+    const ids = [];
+    for (const key of ["allApps", "visibleApps", "apps"]) {
+        const v = c?.[key];
+        if (!v)
+            continue;
+        const it = typeof v[Symbol.iterator] === "function" ? Array.from(v) : [];
+        for (const a of it) {
+            const id = typeof a === "number" ? a : a?.appid ?? a?.app_id;
+            if (typeof id === "number")
+                ids.push(id);
+        }
+        if (ids.length)
+            break;
+    }
+    return ids.sort((x, y) => x - y).join(",");
 }
 async function addToCollection(name, appids) {
     const existing = collectionStore.userCollections.find((c) => c.displayName === name);
@@ -87,9 +122,30 @@ function Content() {
             setMsg(T.noStore);
         }
     };
+    const fixNameless = async () => {
+        try {
+            const map = await namelessMap();
+            const known = Object.keys(map || {});
+            if (!known.length)
+                return;
+            for (const c of visibleCollections()) {
+                if (String(c?.displayName ?? "").trim())
+                    continue;
+                const sig = signatureOf(c);
+                if (map[sig]) {
+                    log("renaming nameless collection to", map[sig]);
+                    c.displayName = map[sig];
+                    await c.Save();
+                }
+            }
+        }
+        catch (e) {
+            log("fixNameless failed", String(e));
+        }
+    };
     SP_REACT.useEffect(() => {
         log("mounted");
-        refresh();
+        void fixNameless().then(refresh);
         defaultName().then((v) => { if (v) {
             log("default name", v);
             setName(v);
@@ -113,7 +169,14 @@ function Content() {
                 setBusy(false);
                 return;
             }
-            await addToCollection(n, picked.map((a) => a.appid));
+            const ids = picked.map((a) => a.appid);
+            const coll = await addToCollection(n, ids);
+            try {
+                await rememberName(n, signatureOf(coll));
+            }
+            catch (e) {
+                log("remember failed", String(e));
+            }
             setMsg(T.created(n, picked.length));
             refresh();
         }
