@@ -1,83 +1,78 @@
-# Collection Manager (plugin Decky)
+# Collection Creator (plugin Decky)
 
-Petit plugin pour Steam Deck qui crée et applique les **collections Steam** depuis le menu d'accès rapide, accompagné
-d'un service local pilotable par script.
+Créer et remplir des **collections Steam** depuis le menu d'accès rapide, **à chaud** — sans redémarrer Steam, sans
+toucher aux fichiers.
 
-Steam n'expose **aucune API pour les collections** (contrairement aux raccourcis et artworks, qu'un plugin Decky peut
-modifier à chaud). Les collections ne vivent que dans `localconfig.vdf`, que Steam réécrit depuis sa mémoire pendant
-qu'il tourne. D'où le service compagnon qui :
+Le plugin utilise le module interne `collectionStore` du client Steam (celui qu'utilise aussi ROM Sync) : la collection
+est créée avec `NewUnsavedCollection()`, les jeux sont ajoutés via `AsDragDropCollection().AddApps()`, puis `Save()`.
+La bibliothèque Steam se met à jour immédiatement.
 
-1. arrête Steam,
-2. écrit la collection dans `localconfig.vdf` (sauvegarde préalable),
-3. relance Steam.
+## Fonctions
 
-Conséquence : l'application n'est possible qu'en **mode Bureau**. En mode Gaming, Steam est supervisé et relancé
-immédiatement — le panneau vous invite donc à basculer.
-
-## Prérequis
-
-- Steam Deck / SteamOS avec **Decky Loader**
-- Python 3 (présent sur SteamOS)
+- liste de tes collections Steam avec le nombre de jeux,
+- création d'une collection remplie par **filtre sur le titre** (nom `Zelda`, filtre `zelda` → tous les jeux dont le
+  titre contient « zelda »),
+- **français / anglais** (suit la langue du client Steam),
+- fonctionne en mode Gaming et en mode Bureau.
 
 ## Installation
 
+Nécessite [Decky Loader](https://github.com/SteamDeckHomebrew/decky-loader).
+
 ```bash
-git clone <ce dépôt> && cd decky-collection-creator
+git clone https://github.com/foXaCe/decky-collection-creator.git
+cd decky-collection-creator
 ./install.sh
 ```
 
-Puis redémarrez Decky (ou Steam). Le plugin apparaît dans le menu d'accès rapide sous **Collection Manager**.
+Ou à la main :
 
-Installation manuelle : copier `plugin/` vers `~/homebrew/plugins/collection-creator/`, `service/collectiond.py` vers
-`~/Games/_tools/`, `service/collectiond.service` vers `~/.config/systemd/user/`, puis
-`systemctl --user enable --now collectiond`.
+```bash
+cd plugin && pnpm install && pnpm build
+```
+
+puis copier `plugin/plugin.json`, `plugin/main.py`, `plugin/package.json` et `plugin/dist/` dans
+`~/homebrew/plugins/collection-creator/` (propriétaire `root`, lisible par tous), et redémarrer Decky.
 
 ## Utilisation
 
-Menu d'accès rapide → **Collection Manager** :
+Menu d'accès rapide → **Decky** → **Collection Creator** :
 
-- la liste de vos collections (nom + nombre de jeux),
-- **Nouvelle collection** : saisir un nom, *Créer et appliquer* → Steam redémarre avec la collection (vide),
-- **Appliquer** : redémarre Steam pour prendre en compte les changements faits via l'API.
+| Champ | Rôle |
+|---|---|
+| **Nom de la collection** | la collection à créer (ou à compléter si elle existe) |
+| **Jeux dont le titre contient** | filtre optionnel ; par défaut, le nom de la collection |
 
-Les jeux s'ajoutent par l'API (le panneau crée des collections vides ; l'interface Steam permet ensuite d'y ajouter
-des jeux, ou un script peut passer des appids).
+Appuie sur **Créer / remplir**. Les jeux sont cherchés parmi tes **raccourcis non-Steam** (jeux émulés, recomps, …).
+La collection apparaît aussitôt dans la barre latérale de la bibliothèque.
 
-## API (localhost:8731)
-
-| Méthode | Chemin | Corps | Effet |
-|---|---|---|---|
-| GET | `/status` | – | `{mode, steam, collections[]}` |
-| GET | `/collections` | – | `{collections[]}` |
-| POST | `/apply` | `{}` | arrête puis relance Steam |
-| POST | `/apply` | `{"name": "Mario", "appids": [...]}` | crée/complète pendant l'arrêt, puis relance |
-| POST | `/collections` | `{"name": "...", "appids": [...]}` | écrit tout de suite (Steam doit déjà être arrêté) |
-
-Les appids sont acceptés signés (ids de raccourcis Steam, ex. `-1436474168`) ou non signés (`2858493128`).
-
-```bash
-# créer/compléter une collection sans passer par le panneau
-curl -X POST 127.0.0.1:8731/apply \
-     -H 'Content-Type: application/json' \
-     -d '{"name":"Mario","appids":[-1436474168,-2021531861]}'
-```
-
-## Fichiers
+## Fonctionnement
 
 ```
-plugin/          plugin Decky (plugin.json, main.py, dist/index.js)
-service/         collectiond.py + unité systemd utilisateur
-install.sh       installeur
+collectionStore.userCollections.find(c => c.displayName === name)
+  ?? collectionStore.NewUnsavedCollection(name, undefined, [])
+collection.AsDragDropCollection().AddApps([{ appid }, …])
+await collection.Save()
 ```
 
-`collectiond` journalise dans `~/Games/_tools/collectiond.log` ; chaque écriture laisse un
-`localconfig.vdf.bak-<horodatage>` à côté de l'original.
+`collectionStore` n'est pas dans les typings `@decky/ui` : c'est un global du client Steam. Le code est prudent sur sa
+forme (`deckDesktopApps` / `localGamesCollection` / `allAppsCollection`) car ces noms ont bougé selon les versions.
+
+## Arborescence
+
+```
+plugin/          plugin Decky (TypeScript + @decky/ui, construit avec rollup)
+  src/index.tsx  panneau, i18n, appels collectionStore
+  dist/index.js  bundle compilé
+install.sh       copie le plugin dans ~/homebrew/plugins
+```
 
 ## Limites
 
-- Mode Bureau uniquement (voir plus haut).
-- Steam redémarre à l'application — inévitable, il lit les collections au démarrage.
-- Les collections sont par compte Steam, dans `userdata/<id>/config/localconfig.vdf`.
+- Repose sur un **module Steam non documenté** : une future mise à jour du client peut le renommer (le plugin affiche
+  alors un message au lieu de planter).
+- La sélection des jeux se fait par **sous-chaîne du titre**, sur les raccourcis non-Steam uniquement.
+- Les collections sont liées au compte Steam.
 
 ## Licence
 
