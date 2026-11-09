@@ -1,3 +1,23 @@
+const manifest = {"name":"Collection Creator"};
+const API_VERSION = 2;
+const internalAPIConnection = window.__DECKY_SECRET_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED_deckyLoaderAPIInit;
+if (!internalAPIConnection) {
+    throw new Error('[@decky/api]: Failed to connect to the loader as as the loader API was not initialized. This is likely a bug in Decky Loader.');
+}
+let api;
+try {
+    api = internalAPIConnection.connect(API_VERSION, manifest.name);
+}
+catch {
+    api = internalAPIConnection.connect(1, manifest.name);
+    console.warn(`[@decky/api] Requested API version ${API_VERSION} but the running loader only supports version 1. Some features may not work.`);
+}
+if (api._version != API_VERSION) {
+    console.warn(`[@decky/api] Requested API version ${API_VERSION} but the running loader only supports version ${api._version}. Some features may not work.`);
+}
+const callable = api.callable;
+
+const defaultName = callable("default_name");
 const log = (...a) => { try {
     console.log("[CollectionCreator]", ...a);
 }
@@ -59,7 +79,7 @@ function Content() {
     const refresh = () => {
         try {
             const l = listCollections();
-            log("collections", l.length);
+            log("collections", l.length, JSON.stringify(l));
             setCols(l);
         }
         catch (e) {
@@ -67,7 +87,14 @@ function Content() {
             setMsg(T.noStore);
         }
     };
-    SP_REACT.useEffect(() => { log("mounted"); refresh(); }, []);
+    SP_REACT.useEffect(() => {
+        log("mounted");
+        refresh();
+        defaultName().then((v) => { if (v) {
+            log("default name", v);
+            setName(v);
+        } }).catch(() => { });
+    }, []);
     const create = async () => {
         const n = name.trim();
         const f = (filter.trim() || n).toLowerCase();
@@ -96,7 +123,7 @@ function Content() {
         }
         setBusy(false);
     };
-    return (SP_JSX.jsxs(SP_JSX.Fragment, { children: [SP_JSX.jsxs(DFL.PanelSection, { title: T.list, children: [cols.map((c) => (SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsxs("div", { style: { display: "flex", justifyContent: "space-between", gap: 8, fontSize: 13 }, children: [SP_JSX.jsx("span", { children: c.name || "(?)" }), SP_JSX.jsx("span", { style: { opacity: 0.6 }, children: c.count })] }) }, c.name))), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: refresh, disabled: busy, children: T.refresh }) })] }), SP_JSX.jsxs(DFL.PanelSection, { title: T.newTitle, children: [SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.TextField, { label: T.name, value: name, onChange: (e) => setName(e.target.value) }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.TextField, { label: T.filter, value: filter, onChange: (e) => setFilter(e.target.value) }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: create, disabled: busy || !name.trim(), children: T.create }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx("div", { style: { fontSize: 11, opacity: 0.6 }, children: T.hint }) }), msg && SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx("div", { role: "status", style: { fontSize: 12 }, children: msg }) })] })] }));
+    return (SP_JSX.jsxs(SP_JSX.Fragment, { children: [SP_JSX.jsxs(DFL.PanelSection, { title: T.newTitle, children: [SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.TextField, { label: T.name, value: name, onChange: (e) => setName(e.target.value) }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.TextField, { label: T.filter, value: filter, onChange: (e) => setFilter(e.target.value) }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: create, disabled: busy || !name.trim(), children: T.create }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx("div", { style: { fontSize: 11, opacity: 0.6 }, children: T.hint }) }), msg && SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx("div", { role: "status", style: { fontSize: 12 }, children: msg }) })] }), SP_JSX.jsxs(DFL.PanelSection, { title: T.list, children: [cols.map((c) => (SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsxs("div", { style: { display: "flex", justifyContent: "space-between", gap: 8, fontSize: 13 }, children: [SP_JSX.jsx("span", { children: c.name || "(?)" }), SP_JSX.jsx("span", { style: { opacity: 0.6 }, children: c.count })] }) }, c.name))), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: refresh, disabled: busy, children: T.refresh }) })] })] }));
 }
 const Icon = () => (SP_JSX.jsxs("svg", { viewBox: "0 0 24 24", width: "1em", height: "1em", "aria-hidden": "true", children: [SP_JSX.jsx("rect", { x: "1", y: "1", width: "22", height: "22", rx: "5", fill: "#1b2838" }), SP_JSX.jsx("rect", { x: "4.2", y: "4.2", width: "6.6", height: "6.6", rx: "1.5", fill: "#c6def0" }), SP_JSX.jsx("rect", { x: "13.2", y: "4.2", width: "6.6", height: "6.6", rx: "1.5", fill: "#c6def0" }), SP_JSX.jsx("rect", { x: "4.2", y: "13.2", width: "6.6", height: "6.6", rx: "1.5", fill: "#c6def0" }), SP_JSX.jsx("path", { d: "M16.5 13.4v6.2M13.4 16.5h6.2", stroke: "#66c0f4", strokeWidth: "1.9", strokeLinecap: "round" })] }));
 var index = DFL.definePlugin(() => {

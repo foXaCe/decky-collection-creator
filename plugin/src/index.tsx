@@ -1,5 +1,8 @@
 import { useEffect, useState } from "react";
 import { ButtonItem, PanelSection, PanelSectionRow, TextField, definePlugin } from "@decky/ui";
+import { callable } from "@decky/api";
+
+const defaultName = callable<[], string>("default_name");
 
 /* Steam's own collection store: a global of the client, not a file. */
 declare const collectionStore: any;
@@ -65,7 +68,7 @@ function Content() {
   const refresh = () => {
     try {
       const l = listCollections();
-      log("collections", l.length);
+      log("collections", l.length, JSON.stringify(l));
       setCols(l);
     } catch (e) {
       log("refresh failed", String(e));
@@ -73,7 +76,11 @@ function Content() {
     }
   };
 
-  useEffect(() => { log("mounted"); refresh(); }, []);
+  useEffect(() => {
+    log("mounted");
+    refresh();
+    defaultName().then((v) => { if (v) { log("default name", v); setName(v); } }).catch(() => {});
+  }, []);
 
   const create = async () => {
     const n = name.trim();
@@ -98,6 +105,19 @@ function Content() {
 
   return (
     <>
+      <PanelSection title={T.newTitle}>
+        <PanelSectionRow>
+          <TextField label={T.name} value={name} onChange={(e) => setName((e.target as HTMLInputElement).value)} />
+        </PanelSectionRow>
+        <PanelSectionRow>
+          <TextField label={T.filter} value={filter} onChange={(e) => setFilter((e.target as HTMLInputElement).value)} />
+        </PanelSectionRow>
+        <PanelSectionRow>
+          <ButtonItem layout="below" onClick={create} disabled={busy || !name.trim()}>{T.create}</ButtonItem>
+        </PanelSectionRow>
+        <PanelSectionRow><div style={{ fontSize: 11, opacity: 0.6 }}>{T.hint}</div></PanelSectionRow>
+        {msg && <PanelSectionRow><div role="status" style={{ fontSize: 12 }}>{msg}</div></PanelSectionRow>}
+      </PanelSection>
       <PanelSection title={T.list}>
         {cols.map((c) => (
           <PanelSectionRow key={c.name}>
@@ -112,19 +132,6 @@ function Content() {
         </PanelSectionRow>
       </PanelSection>
 
-      <PanelSection title={T.newTitle}>
-        <PanelSectionRow>
-          <TextField label={T.name} value={name} onChange={(e) => setName((e.target as HTMLInputElement).value)} />
-        </PanelSectionRow>
-        <PanelSectionRow>
-          <TextField label={T.filter} value={filter} onChange={(e) => setFilter((e.target as HTMLInputElement).value)} />
-        </PanelSectionRow>
-        <PanelSectionRow>
-          <ButtonItem layout="below" onClick={create} disabled={busy || !name.trim()}>{T.create}</ButtonItem>
-        </PanelSectionRow>
-        <PanelSectionRow><div style={{ fontSize: 11, opacity: 0.6 }}>{T.hint}</div></PanelSectionRow>
-        {msg && <PanelSectionRow><div role="status" style={{ fontSize: 12 }}>{msg}</div></PanelSectionRow>}
-      </PanelSection>
     </>
   );
 }
