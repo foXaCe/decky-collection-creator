@@ -1,10 +1,14 @@
 {
-  "name": "Collection Manager",
+  "name": "Collection Creator",
   "author": "foXaCe",
   "api_version": 1,
   "flags": [],
   "publish": {
-    "tags": ["utility", "collections", "steam"],
+    "tags": [
+      "utility",
+      "collections",
+      "steam"
+    ],
     "description": "Create and apply Steam collections from the Quick Access Menu. Steam has no collection API, so a companion service stops Steam, edits localconfig.vdf and restarts it (Desktop Mode).",
     "image": ""
   }

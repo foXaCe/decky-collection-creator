@@ -2,7 +2,7 @@
 # Collection Manager — installer (Steam Deck / SteamOS, Decky Loader required)
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PLUGIN_DIR="$HOME/homebrew/plugins/collection-manager"
+PLUGIN_DIR="$HOME/homebrew/plugins/collection-creator"
 
 if [ ! -f "$HERE/plugin/dist/index.js" ]; then
   echo "plugin/dist/index.js missing — build it first: cd plugin && pnpm install && pnpm build"

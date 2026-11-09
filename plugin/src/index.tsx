@@ -1,89 +1,133 @@
 import { useEffect, useState } from "react";
-import {
-  ButtonItem,
-  PanelSection,
-  PanelSectionRow,
-  TextField,
-  definePlugin,
+import { ButtonItem, PanelSection, PanelSectionRow, TextField, definePlugin } from "@decky/ui";
 
+/* Steam's own collection store: a global of the client, not a file. */
+declare const collectionStore: any;
+declare const appStore: any;
 
-} from "@decky/ui";
-import { callable } from "@decky/api";
+type Coll = { name: string; count: number };
 
-/* ------------------------------------------------------------------ API */
-
-type Collection = { id: string; name: string; count: number; added: number[] };
-type State = { mode: "desktop" | "gaming"; steam: boolean; collections: Collection[] };
-type ErrPayload = { error?: string; error_code?: string };
-type ApplyResult = ErrPayload & {
-  ok?: boolean;
-  result?: { created: boolean; name: string; added: number; total: number };
-};
-
-const getState = callable<[], State | ErrPayload>("get_state");
-const createCollection = callable<[name: string], ApplyResult>("create");
-const applyNow = callable<[], ApplyResult>("apply");
-
-/* ------------------------------------------------------------------ i18n */
+const log = (...a: unknown[]) => { try { console.log("[CollectionCreator]", ...a); } catch { /* */ } };
 
 const LANG = (navigator.language || "en").toLowerCase();
 const STR = {
   en: {
-    list: "Your collections",
-    summary: (n: number, mode: string, steam: string) => `${n} collections · ${mode} · Steam ${steam}`,
-    desktop: "desktop mode", gaming: "gaming mode", running: "running", stopped: "stopped",
-    refresh: "Refresh", newTitle: "New collection", name: "Name", create: "Create and apply",
-    needDesktopCreate: "Switch to Desktop Mode to create a collection.",
-    applyTitle: "Apply", apply: "Restart Steam now",
-    needDesktopApply: "Not available in Gaming Mode (Steam is supervised there).",
-    created: (n: string, t: number) => `“${n}” created (${t} games). Steam is restarting…`,
-    restarting: "Steam is restarting…",
-    errGaming: "Gaming Mode: switch to Desktop Mode first.",
-    errSteam: "Steam could not be stopped.",
-    errName: "Enter a name first.",
-    errWrite: "Could not write the Steam configuration.",
-    errService: "collectiond is not reachable (is the service running?).",
-    errGeneric: "Something went wrong.",
-    unnamed: "(unnamed)",
+    list: "Steam collections", refresh: "Refresh", newTitle: "Create a collection",
+    name: "Collection name", filter: "Games whose title contains (optional)",
+    create: "Create / fill", created: (n: string, k: number) => `“${n}” → ${k} games added.`,
+    noMatch: "No game matches that filter.", needName: "Enter a name.",
+    noStore: "Steam collection store unavailable.",
+    hint: "Changes apply immediately — no Steam restart.",
   },
   fr: {
-    list: "Tes collections",
-    summary: (n: number, mode: string, steam: string) => `${n} collections · ${mode} · Steam ${steam}`,
-    desktop: "mode Bureau", gaming: "mode Gaming", running: "actif", stopped: "arrêté",
-    refresh: "Rafraîchir", newTitle: "Nouvelle collection", name: "Nom", create: "Créer et appliquer",
-    needDesktopCreate: "Passe en mode Bureau pour créer une collection.",
-    applyTitle: "Appliquer", apply: "Redémarrer Steam maintenant",
-    needDesktopApply: "Indisponible en mode Gaming (Steam y est supervisé).",
-    created: (n: string, t: number) => `« ${n} » créée (${t} jeux). Steam redémarre…`,
-    restarting: "Steam redémarre…",
-    errGaming: "Mode Gaming : passe d'abord en mode Bureau.",
-    errSteam: "Steam n'a pas pu être arrêté.",
-    errName: "Saisis d'abord un nom.",
-    errWrite: "Impossible d'écrire la configuration Steam.",
-    errService: "collectiond injoignable (le service tourne-t-il ?).",
-    errGeneric: "Une erreur est survenue.",
-    unnamed: "(sans nom)",
+    list: "Collections Steam", refresh: "Rafraîchir", newTitle: "Créer une collection",
+    name: "Nom de la collection", filter: "Jeux dont le titre contient (optionnel)",
+    create: "Créer / remplir", created: (n: string, k: number) => `« ${n} » → ${k} jeux ajoutés.`,
+    noMatch: "Aucun jeu ne correspond à ce filtre.", needName: "Saisis un nom.",
+    noStore: "Collection store de Steam indisponible.",
+    hint: "Les changements s'appliquent tout de suite — pas de redémarrage.",
   },
 };
 const T = STR[LANG.startsWith("fr") ? "fr" : "en"];
 
-const log = (...a: unknown[]) => {
-  try { console.log("[CollectionManager]", ...a); } catch { /* ignore */ }
-};
-
-function errorText(res: ErrPayload | undefined): string {
-  log("error payload", JSON.stringify(res));
-  switch (res?.error_code) {
-    case "gaming": return T.errGaming;
-    case "steam": return T.errSteam;
-    case "name": return T.errName;
-    case "write": return T.errWrite;
-    case "service": return T.errService;
-    default: return res?.error || T.errGeneric;
-  }
+function shortcuts(): any[] {
+  const cs = collectionStore;
+  const apps = cs?.deckDesktopApps?.allApps ?? cs?.localGamesCollection?.allApps ?? cs?.allAppsCollection?.allApps ?? appStore?.allApps ?? [];
+  return apps.filter((a: any) => {
+    try { return a?.BIsShortcut?.(); } catch { return false; }
+  });
 }
 
-/* ------------------------------------------------------------------ icône */
+function listCollections(): Coll[] {
+  const cs = collectionStore;
+  const cols = cs?.userCollections ?? [];
+  return cols.map((c: any) => ({
+    name: c?.displayName ?? "?",
+    count: c?.visibleApps?.length ?? c?.allApps?.length ?? c?.apps?.size ?? 0,
+  }));
+}
+
+async function addToCollection(name: string, appids: number[]) {
+  const existing = collectionStore.userCollections.find((c: any) => c.displayName === name);
+  const collection = existing ?? collectionStore.NewUnsavedCollection(name, undefined, []);
+  for (const appid of appids) collection.AsDragDropCollection().AddApps([{ appid }]);
+  await collection.Save();
+  return collection;
+}
+
+function Content() {
+  const [cols, setCols] = useState<Coll[]>([]);
+  const [name, setName] = useState("");
+  const [filter, setFilter] = useState("");
+  const [msg, setMsg] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const refresh = () => {
+    try {
+      const l = listCollections();
+      log("collections", l.length);
+      setCols(l);
+    } catch (e) {
+      log("refresh failed", String(e));
+      setMsg(T.noStore);
+    }
+  };
+
+  useEffect(() => { log("mounted"); refresh(); }, []);
+
+  const create = async () => {
+    const n = name.trim();
+    const f = (filter.trim() || n).toLowerCase();
+    if (!n) { setMsg(T.needName); return; }
+    setBusy(true);
+    try {
+      const pool = shortcuts();
+      log("shortcuts", pool.length);
+      const picked = pool.filter((a: any) => String(a?.display_name ?? "").toLowerCase().includes(f));
+      log("matched", picked.length, "for", f);
+      if (!picked.length) { setMsg(T.noMatch); setBusy(false); return; }
+      await addToCollection(n, picked.map((a: any) => a.appid));
+      setMsg(T.created(n, picked.length));
+      refresh();
+    } catch (e) {
+      log("create failed", String(e));
+      setMsg(T.noStore);
+    }
+    setBusy(false);
+  };
+
+  return (
+    <>
+      <PanelSection title={T.list}>
+        {cols.map((c) => (
+          <PanelSectionRow key={c.name}>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 8, fontSize: 13 }}>
+              <span>{c.name || "(?)"}</span>
+              <span style={{ opacity: 0.6 }}>{c.count}</span>
+            </div>
+          </PanelSectionRow>
+        ))}
+        <PanelSectionRow>
+          <ButtonItem layout="below" onClick={refresh} disabled={busy}>{T.refresh}</ButtonItem>
+        </PanelSectionRow>
+      </PanelSection>
+
+      <PanelSection title={T.newTitle}>
+        <PanelSectionRow>
+          <TextField label={T.name} value={name} onChange={(e) => setName((e.target as HTMLInputElement).value)} />
+        </PanelSectionRow>
+        <PanelSectionRow>
+          <TextField label={T.filter} value={filter} onChange={(e) => setFilter((e.target as HTMLInputElement).value)} />
+        </PanelSectionRow>
+        <PanelSectionRow>
+          <ButtonItem layout="below" onClick={create} disabled={busy || !name.trim()}>{T.create}</ButtonItem>
+        </PanelSectionRow>
+        <PanelSectionRow><div style={{ fontSize: 11, opacity: 0.6 }}>{T.hint}</div></PanelSectionRow>
+        {msg && <PanelSectionRow><div role="status" style={{ fontSize: 12 }}>{msg}</div></PanelSectionRow>}
+      </PanelSection>
+    </>
+  );
+}
 
 const Icon = () => (
   <svg viewBox="0 0 24 24" width="1em" height="1em" aria-hidden="true">
@@ -95,113 +139,7 @@ const Icon = () => (
   </svg>
 );
 
-/* ------------------------------------------------------------------ panneau */
-
-function Content() {
-  const [state, setState] = useState<State | null>(null);
-  const [name, setName] = useState("");
-  const [msg, setMsg] = useState("");
-  const [busy, setBusy] = useState(false);
-
-  const refresh = async () => {
-    log("refresh()");
-    try {
-      const s = await getState();
-      log("state", JSON.stringify(s).slice(0, 200));
-      if ((s as ErrPayload).error) { setState(null); setMsg(errorText(s as ErrPayload)); }
-      else { setState(s as State); setMsg(""); }
-    } catch (e) {
-      log("refresh failed", String(e));
-      setMsg(T.errService);
-    }
-  };
-
-  useEffect(() => { log("mounted"); void refresh(); }, []);
-
-  const create = async () => {
-    const n = name.trim();
-    if (!n) { setMsg(T.errName); return; }
-    setBusy(true);
-    try {
-      const r = await createCollection(n);
-      log("create ->", JSON.stringify(r));
-      if (r.error) setMsg(errorText(r));
-      else if (r.result) setMsg(T.created(r.result.name, r.result.total));
-      else setMsg(T.restarting);
-      setName("");
-    } catch (e) {
-      log("create failed", String(e));
-      setMsg(T.errService);
-    }
-    setBusy(false);
-  };
-
-  const apply = async () => {
-    setBusy(true);
-    try {
-      const r = await applyNow();
-      log("apply ->", JSON.stringify(r));
-      setMsg(r.error ? errorText(r) : T.restarting);
-    } catch (e) {
-      log("apply failed", String(e));
-      setMsg(T.errService);
-    }
-    setBusy(false);
-  };
-
-  const cols = (state?.collections ?? []).filter((c) => c && (c.name || c.id));
-  const gaming = state?.mode === "gaming";
-
-  return (
-    <>
-      <PanelSection title={T.list}>
-        <PanelSectionRow>
-          <div style={{ fontSize: 12, opacity: 0.7 }}>
-            {T.summary(cols.length, state ? (gaming ? T.gaming : T.desktop) : "…",
-                       state ? (state.steam ? T.running : T.stopped) : "…")}
-          </div>
-        </PanelSectionRow>
-        {cols.map((c) => (
-          <PanelSectionRow key={c.id || c.name}>
-            <div style={{ display: "flex", justifyContent: "space-between", gap: 8, fontSize: 13 }}>
-              <span>{c.name || T.unnamed}</span>
-              <span style={{ opacity: 0.6 }}>{String(c.count ?? 0)}</span>
-            </div>
-          </PanelSectionRow>
-        ))}
-        <PanelSectionRow>
-          <ButtonItem layout="below" onClick={refresh} disabled={busy}>{T.refresh}</ButtonItem>
-        </PanelSectionRow>
-      </PanelSection>
-
-      <PanelSection title={T.newTitle}>
-        <PanelSectionRow>
-          <TextField
-            label={T.name}
-            value={name}
-            onChange={(e) => setName((e.target as HTMLInputElement).value)}
-          />
-        </PanelSectionRow>
-        <PanelSectionRow>
-          <ButtonItem layout="below" onClick={create} disabled={busy || gaming || !name.trim()}>
-            {T.create}
-          </ButtonItem>
-        </PanelSectionRow>
-        {gaming && <PanelSectionRow><div style={{ fontSize: 12, opacity: 0.7 }}>{T.needDesktopCreate}</div></PanelSectionRow>}
-      </PanelSection>
-
-      <PanelSection title={T.applyTitle}>
-        <PanelSectionRow>
-          <ButtonItem layout="below" onClick={apply} disabled={busy || gaming}>{T.apply}</ButtonItem>
-        </PanelSectionRow>
-        {gaming && <PanelSectionRow><div style={{ fontSize: 12, opacity: 0.7 }}>{T.needDesktopApply}</div></PanelSectionRow>}
-        {msg && <PanelSectionRow><div role="status" style={{ fontSize: 12 }}>{msg}</div></PanelSectionRow>}
-      </PanelSection>
-    </>
-  );
-}
-
 export default definePlugin(() => {
-  log("plugin factory");
-  return { name: "Collection Manager", content: <Content />, icon: <Icon /> };
+  log("factory");
+  return { name: "Collection Creator", content: <Content />, icon: <Icon /> };
 });

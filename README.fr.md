@@ -22,13 +22,13 @@ immédiatement — le panneau vous invite donc à basculer.
 ## Installation
 
 ```bash
-git clone <ce dépôt> && cd decky-collection-manager
+git clone <ce dépôt> && cd decky-collection-creator
 ./install.sh
 ```
 
 Puis redémarrez Decky (ou Steam). Le plugin apparaît dans le menu d'accès rapide sous **Collection Manager**.
 
-Installation manuelle : copier `plugin/` vers `~/homebrew/plugins/collection-manager/`, `service/collectiond.py` vers
+Installation manuelle : copier `plugin/` vers `~/homebrew/plugins/collection-creator/`, `service/collectiond.py` vers
 `~/Games/_tools/`, `service/collectiond.service` vers `~/.config/systemd/user/`, puis
 `systemctl --user enable --now collectiond`.
 

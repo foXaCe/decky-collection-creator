@@ -1,7 +1,22 @@
 {
-  "name": "collection-manager",
-  "version": "1.1.0",
+  "name": "collection-creator",
+  "version": "1.2.0",
   "type": "module",
   "private": true,
-  "license": "MIT"
+  "license": "MIT",
+  "scripts": {
+    "build": "rollup -c",
+    "watch": "rollup -c -w"
+  },
+  "dependencies": {
+    "@decky/api": "^1.1.3"
+  },
+  "devDependencies": {
+    "@decky/rollup": "^1.0.2",
+    "@decky/ui": "^4.11.0",
+    "@types/react": "19.1.1",
+    "@types/react-dom": "19.1.1",
+    "rollup": "^4.53.3",
+    "typescript": "5.6.2"
+  }
 }
