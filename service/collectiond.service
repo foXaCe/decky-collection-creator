@@ -1,0 +1,12 @@
+[Unit]
+Description=collectiond — Steam collection helper for the Collection Manager plugin
+After=default.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 %h/Games/_tools/collectiond.py
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target
