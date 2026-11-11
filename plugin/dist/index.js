@@ -20,6 +20,8 @@ const callable = api.callable;
 const defaultName = callable("default_name");
 const namelessMap = callable("nameless_map");
 const rememberName = callable("remember_name");
+const rulesOf = callable("rules");
+const rememberRule = callable("remember_rule");
 const log = (...a) => { try {
     console.log("[CollectionCreator]", ...a);
 }
@@ -33,6 +35,8 @@ const STR = {
         noMatch: "No game matches that filter.", needName: "Enter a name.",
         noStore: "Steam collection store unavailable.",
         hint: "Changes apply immediately — no Steam restart.",
+        refreshed: (k, names) => k ? `${k} new games added (${names}).` : "Collections are up to date.",
+        refreshHint: "Refresh also adds new games whose title matches each collection.",
     },
     fr: {
         list: "Collections Steam", refresh: "Rafraîchir", newTitle: "Créer une collection",
@@ -41,6 +45,8 @@ const STR = {
         noMatch: "Aucun jeu ne correspond à ce filtre.", needName: "Saisis un nom.",
         noStore: "Collection store de Steam indisponible.",
         hint: "Les changements s'appliquent tout de suite — pas de redémarrage.",
+        refreshed: (k, names) => k ? `${k} nouveaux jeux ajoutés (${names}).` : "Les collections sont à jour.",
+        refreshHint: "Rafraîchir ajoute aussi les nouveaux jeux dont le titre correspond à chaque collection.",
     },
 };
 const T = STR[LANG.startsWith("fr") ? "fr" : "en"];
@@ -97,6 +103,61 @@ function signatureOf(c) {
     }
     return ids.sort((x, y) => x - y).join(",");
 }
+function memberIds(c) {
+    const sig = signatureOf(c);
+    return new Set(sig ? sig.split(",").map(Number) : []);
+}
+function titleOf(appid) {
+    try {
+        return String(appStore?.GetAppOverviewByAppID?.(appid)?.display_name ?? "");
+    }
+    catch {
+        return "";
+    }
+}
+/**
+ * The title filter of a collection: the one saved when it was created, or, for an
+ * older collection, its own name when every game already in it carries that name
+ * ("Mario" holding only Mario games). Anything else is left alone.
+ */
+function filterFor(c, rules) {
+    const name = String(c?.displayName ?? "").trim();
+    if (!name)
+        return "";
+    if (rules[name])
+        return rules[name].toLowerCase();
+    const ids = Array.from(memberIds(c));
+    const needle = name.toLowerCase();
+    if (ids.length === 0)
+        return "";
+    return ids.every((id) => titleOf(id).toLowerCase().includes(needle)) ? needle : "";
+}
+/** Add every shortcut matching a collection's filter that is not in it yet. */
+async function refill(rules) {
+    const pool = shortcuts();
+    let added = 0;
+    const names = [];
+    for (const c of visibleCollections()) {
+        const f = filterFor(c, rules);
+        if (!f)
+            continue;
+        const have = memberIds(c);
+        const fresh = pool.filter((a) => !have.has(a.appid) && String(a?.display_name ?? "").toLowerCase().includes(f));
+        if (!fresh.length)
+            continue;
+        for (const a of fresh)
+            c.AsDragDropCollection().AddApps([{ appid: a.appid }]);
+        await c.Save();
+        try {
+            await rememberName(c.displayName, signatureOf(c));
+        }
+        catch { /* */ }
+        log("refilled", c.displayName, fresh.length);
+        added += fresh.length;
+        names.push(`${c.displayName} +${fresh.length}`);
+    }
+    return { added, names };
+}
 async function addToCollection(name, appids) {
     const existing = collectionStore.userCollections.find((c) => c.displayName === name);
     const collection = existing ?? collectionStore.NewUnsavedCollection(name, undefined, []);
@@ -111,7 +172,7 @@ function Content() {
     const [filter, setFilter] = SP_REACT.useState("");
     const [msg, setMsg] = SP_REACT.useState("");
     const [busy, setBusy] = SP_REACT.useState(false);
-    const refresh = () => {
+    const list = () => {
         try {
             const l = listCollections();
             log("collections", l.length, JSON.stringify(l));
@@ -145,12 +206,27 @@ function Content() {
     };
     SP_REACT.useEffect(() => {
         log("mounted");
-        void fixNameless().then(refresh);
+        void fixNameless().then(list);
         defaultName().then((v) => { if (v) {
             log("default name", v);
             setName(v);
         } }).catch(() => { });
     }, []);
+    const refresh = async () => {
+        setBusy(true);
+        try {
+            await fixNameless();
+            const rules = await rulesOf().catch(() => ({}));
+            const { added, names } = await refill(rules || {});
+            setMsg(T.refreshed(added, names.join(", ")));
+        }
+        catch (e) {
+            log("refill failed", String(e));
+            setMsg(T.noStore);
+        }
+        list();
+        setBusy(false);
+    };
     const create = async () => {
         const n = name.trim();
         const f = (filter.trim() || n).toLowerCase();
@@ -177,8 +253,14 @@ function Content() {
             catch (e) {
                 log("remember failed", String(e));
             }
+            try {
+                await rememberRule(n, f);
+            }
+            catch (e) {
+                log("remember rule failed", String(e));
+            }
             setMsg(T.created(n, picked.length));
-            refresh();
+            list();
         }
         catch (e) {
             log("create failed", String(e));
@@ -186,7 +268,7 @@ function Content() {
         }
         setBusy(false);
     };
-    return (SP_JSX.jsxs(SP_JSX.Fragment, { children: [SP_JSX.jsxs(DFL.PanelSection, { title: T.newTitle, children: [SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.TextField, { label: T.name, value: name, onChange: (e) => setName(e.target.value) }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.TextField, { label: T.filter, value: filter, onChange: (e) => setFilter(e.target.value) }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: create, disabled: busy || !name.trim(), children: T.create }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx("div", { style: { fontSize: 11, opacity: 0.6 }, children: T.hint }) }), msg && SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx("div", { role: "status", style: { fontSize: 12 }, children: msg }) })] }), SP_JSX.jsxs(DFL.PanelSection, { title: T.list, children: [cols.map((c) => (SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsxs("div", { style: { display: "flex", justifyContent: "space-between", gap: 8, fontSize: 13 }, children: [SP_JSX.jsx("span", { children: c.name || "(?)" }), SP_JSX.jsx("span", { style: { opacity: 0.6 }, children: c.count })] }) }, c.name))), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: refresh, disabled: busy, children: T.refresh }) })] })] }));
+    return (SP_JSX.jsxs(SP_JSX.Fragment, { children: [SP_JSX.jsxs(DFL.PanelSection, { title: T.newTitle, children: [SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.TextField, { label: T.name, value: name, onChange: (e) => setName(e.target.value) }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.TextField, { label: T.filter, value: filter, onChange: (e) => setFilter(e.target.value) }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: create, disabled: busy || !name.trim(), children: T.create }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx("div", { style: { fontSize: 11, opacity: 0.6 }, children: T.hint }) }), msg && SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx("div", { role: "status", style: { fontSize: 12 }, children: msg }) })] }), SP_JSX.jsxs(DFL.PanelSection, { title: T.list, children: [cols.map((c) => (SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsxs("div", { style: { display: "flex", justifyContent: "space-between", gap: 8, fontSize: 13 }, children: [SP_JSX.jsx("span", { children: c.name || "(?)" }), SP_JSX.jsx("span", { style: { opacity: 0.6 }, children: c.count })] }) }, c.name))), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: () => void refresh(), disabled: busy, children: T.refresh }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx("div", { style: { fontSize: 11, opacity: 0.6 }, children: T.refreshHint }) })] })] }));
 }
 const Icon = () => (SP_JSX.jsxs("svg", { viewBox: "0 0 24 24", width: "1em", height: "1em", "aria-hidden": "true", children: [SP_JSX.jsx("rect", { x: "1", y: "1", width: "22", height: "22", rx: "5", fill: "#1b2838" }), SP_JSX.jsx("rect", { x: "4.2", y: "4.2", width: "6.6", height: "6.6", rx: "1.5", fill: "#c6def0" }), SP_JSX.jsx("rect", { x: "13.2", y: "4.2", width: "6.6", height: "6.6", rx: "1.5", fill: "#c6def0" }), SP_JSX.jsx("rect", { x: "4.2", y: "13.2", width: "6.6", height: "6.6", rx: "1.5", fill: "#c6def0" }), SP_JSX.jsx("path", { d: "M16.5 13.4v6.2M13.4 16.5h6.2", stroke: "#66c0f4", strokeWidth: "1.9", strokeLinecap: "round" })] }));
 var index = DFL.definePlugin(() => {

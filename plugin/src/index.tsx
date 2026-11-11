@@ -5,6 +5,8 @@ import { callable } from "@decky/api";
 const defaultName = callable<[], string>("default_name");
 const namelessMap = callable<[], Record<string, string>>("nameless_map");
 const rememberName = callable<[name: string, signature: string], void>("remember_name");
+const rulesOf = callable<[], Record<string, string>>("rules");
+const rememberRule = callable<[name: string, titleFilter: string], void>("remember_rule");
 
 /* Steam's own collection store: a global of the client, not a file. */
 declare const collectionStore: any;
@@ -23,6 +25,8 @@ const STR = {
     noMatch: "No game matches that filter.", needName: "Enter a name.",
     noStore: "Steam collection store unavailable.",
     hint: "Changes apply immediately — no Steam restart.",
+    refreshed: (k: number, names: string) => k ? `${k} new games added (${names}).` : "Collections are up to date.",
+    refreshHint: "Refresh also adds new games whose title matches each collection.",
   },
   fr: {
     list: "Collections Steam", refresh: "Rafraîchir", newTitle: "Créer une collection",
@@ -31,6 +35,8 @@ const STR = {
     noMatch: "Aucun jeu ne correspond à ce filtre.", needName: "Saisis un nom.",
     noStore: "Collection store de Steam indisponible.",
     hint: "Les changements s'appliquent tout de suite — pas de redémarrage.",
+    refreshed: (k: number, names: string) => k ? `${k} nouveaux jeux ajoutés (${names}).` : "Les collections sont à jour.",
+    refreshHint: "Rafraîchir ajoute aussi les nouveaux jeux dont le titre correspond à chaque collection.",
   },
 };
 const T = STR[LANG.startsWith("fr") ? "fr" : "en"];
@@ -80,6 +86,51 @@ function signatureOf(c: any): string {
   return ids.sort((x, y) => x - y).join(",");
 }
 
+function memberIds(c: any): Set<number> {
+  const sig = signatureOf(c);
+  return new Set(sig ? sig.split(",").map(Number) : []);
+}
+
+function titleOf(appid: number): string {
+  try { return String(appStore?.GetAppOverviewByAppID?.(appid)?.display_name ?? ""); } catch { return ""; }
+}
+
+/**
+ * The title filter of a collection: the one saved when it was created, or, for an
+ * older collection, its own name when every game already in it carries that name
+ * ("Mario" holding only Mario games). Anything else is left alone.
+ */
+function filterFor(c: any, rules: Record<string, string>): string {
+  const name = String(c?.displayName ?? "").trim();
+  if (!name) return "";
+  if (rules[name]) return rules[name].toLowerCase();
+  const ids = Array.from(memberIds(c));
+  const needle = name.toLowerCase();
+  if (ids.length === 0) return "";
+  return ids.every((id) => titleOf(id).toLowerCase().includes(needle)) ? needle : "";
+}
+
+/** Add every shortcut matching a collection's filter that is not in it yet. */
+async function refill(rules: Record<string, string>): Promise<{ added: number; names: string[] }> {
+  const pool = shortcuts();
+  let added = 0;
+  const names: string[] = [];
+  for (const c of visibleCollections()) {
+    const f = filterFor(c, rules);
+    if (!f) continue;
+    const have = memberIds(c);
+    const fresh = pool.filter((a: any) => !have.has(a.appid) && String(a?.display_name ?? "").toLowerCase().includes(f));
+    if (!fresh.length) continue;
+    for (const a of fresh) c.AsDragDropCollection().AddApps([{ appid: a.appid }]);
+    await c.Save();
+    try { await rememberName(c.displayName, signatureOf(c)); } catch { /* */ }
+    log("refilled", c.displayName, fresh.length);
+    added += fresh.length;
+    names.push(`${c.displayName} +${fresh.length}`);
+  }
+  return { added, names };
+}
+
 async function addToCollection(name: string, appids: number[]) {
   const existing = collectionStore.userCollections.find((c: any) => c.displayName === name);
   const collection = existing ?? collectionStore.NewUnsavedCollection(name, undefined, []);
@@ -95,7 +146,7 @@ function Content() {
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
 
-  const refresh = () => {
+  const list = () => {
     try {
       const l = listCollections();
       log("collections", l.length, JSON.stringify(l));
@@ -125,9 +176,24 @@ function Content() {
 
   useEffect(() => {
     log("mounted");
-    void fixNameless().then(refresh);
+    void fixNameless().then(list);
     defaultName().then((v) => { if (v) { log("default name", v); setName(v); } }).catch(() => {});
   }, []);
+
+  const refresh = async () => {
+    setBusy(true);
+    try {
+      await fixNameless();
+      const rules = await rulesOf().catch(() => ({} as Record<string, string>));
+      const { added, names } = await refill(rules || {});
+      setMsg(T.refreshed(added, names.join(", ")));
+    } catch (e) {
+      log("refill failed", String(e));
+      setMsg(T.noStore);
+    }
+    list();
+    setBusy(false);
+  };
 
   const create = async () => {
     const n = name.trim();
@@ -143,8 +209,9 @@ function Content() {
       const ids = picked.map((a: any) => a.appid);
       const coll = await addToCollection(n, ids);
       try { await rememberName(n, signatureOf(coll)); } catch (e) { log("remember failed", String(e)); }
+      try { await rememberRule(n, f); } catch (e) { log("remember rule failed", String(e)); }
       setMsg(T.created(n, picked.length));
-      refresh();
+      list();
     } catch (e) {
       log("create failed", String(e));
       setMsg(T.noStore);
@@ -177,8 +244,9 @@ function Content() {
           </PanelSectionRow>
         ))}
         <PanelSectionRow>
-          <ButtonItem layout="below" onClick={refresh} disabled={busy}>{T.refresh}</ButtonItem>
+          <ButtonItem layout="below" onClick={() => void refresh()} disabled={busy}>{T.refresh}</ButtonItem>
         </PanelSectionRow>
+        <PanelSectionRow><div style={{ fontSize: 11, opacity: 0.6 }}>{T.refreshHint}</div></PanelSectionRow>
       </PanelSection>
 
     </>

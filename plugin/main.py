@@ -1,4 +1,4 @@
-"""Collection Creator — backend minimal : nom par défaut + mémoire des collections sans nom."""
+"""Collection Creator — backend minimal : nom par défaut, mémoire des collections sans nom et filtres de titre."""
 import json
 import pathlib
 
@@ -7,21 +7,22 @@ import decky
 TOOLS = pathlib.Path.home() / "Games/_tools"
 NAME_FILE = TOOLS / "cc_name.txt"
 MAP_FILE = TOOLS / "cc_names.json"
+RULES_FILE = TOOLS / "cc_rules.json"
 
 
-def _load() -> dict:
+def _load(path: pathlib.Path = MAP_FILE) -> dict:
     try:
-        return json.loads(MAP_FILE.read_text())
+        return json.loads(path.read_text())
     except Exception:
         return {}
 
 
-def _save(m: dict) -> None:
+def _save(m: dict, path: pathlib.Path = MAP_FILE) -> None:
     try:
         TOOLS.mkdir(parents=True, exist_ok=True)
-        MAP_FILE.write_text(json.dumps(m, indent=1, sort_keys=True))
+        path.write_text(json.dumps(m, indent=1, sort_keys=True))
     except OSError as e:
-        decky.logger.warning(f"cannot write {MAP_FILE}: {e}")
+        decky.logger.warning(f"cannot write {path}: {e}")
 
 
 class Plugin:
@@ -44,6 +45,19 @@ class Plugin:
         if not name or not signature:
             return
         m = _load()
+        # One signature per collection: drop the old one when the content changed.
+        m = {sig: n for sig, n in m.items() if n != name}
         m[signature] = name
         _save(m)
         decky.logger.info(f"remembered '{name}' for {len(signature.split(','))} apps")
+
+    async def rules(self):
+        """Title filter of each collection, so Refresh can add newly matching games."""
+        return _load(RULES_FILE)
+
+    async def remember_rule(self, name: str, title_filter: str):
+        if not name or not title_filter:
+            return
+        r = _load(RULES_FILE)
+        r[name] = title_filter
+        _save(r, RULES_FILE)
